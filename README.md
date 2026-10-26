@@ -1,5 +1,13 @@
 # tayna
 
+[![check](https://github.com/ni-kr/tayna/actions/workflows/check.yml/badge.svg?branch=main&event=push)](https://github.com/ni-kr/tayna/actions/workflows/check.yml?query=branch%3Amain+event%3Apush)
+[![test](https://github.com/ni-kr/tayna/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/ni-kr/tayna/actions/workflows/test.yml?query=branch%3Amain+event%3Apush)
+[![security](https://github.com/ni-kr/tayna/actions/workflows/security.yml/badge.svg)](https://github.com/ni-kr/tayna/actions/workflows/security.yml)
+[![codecov](https://codecov.io/gh/ni-kr/tayna/branch/main/graph/badge.svg)](https://codecov.io/gh/ni-kr/tayna)
+[![crates.io](https://img.shields.io/crates/v/tayna.svg)](https://crates.io/crates/tayna)
+[![docs.rs](https://docs.rs/tayna/badge.svg)](https://docs.rs/tayna)
+[![license](https://img.shields.io/crates/l/tayna.svg)](https://github.com/ni-kr/tayna/blob/main/LICENSE)
+
 Policy-driven password generation for Rust, with a builder API and a thin
 command-line wrapper.
 
