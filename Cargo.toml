@@ -8,7 +8,10 @@ readme = "README.md"
 repository = "https://github.com/ni-kr/tayna"
 description = "Policy-driven password generation library, with an optional CLI."
 keywords = ["password", "generator", "security", "credentials", "cli"]
-exclude = ["/.github"]
+exclude = ["/.config", "/.github", "/CONTRIBUTING.md"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 clap = { version = "4.6.6", features = ["derive"], optional = true }

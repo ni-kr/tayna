@@ -1,0 +1,161 @@
+# This workflow uses release-plz for continuous deployment.
+#
+# Merging to `main` results in a release on crates.io if the change modifies a
+# file included in the published crate. It happens without a manual
+# `cargo publish` or manually assigned version numbers. Release-plz is
+# configured in .config/release-plz.toml.
+#
+# Jobs:
+# - release-plz-pr: opens or updates a pull request with the version bump for
+#   the next release
+# - release-plz-release: publishes unreleased versions on crates.io, creates
+#   the corresponding git tag, and creates a GitHub Release
+#
+# ---------------------------------------------------------------------------
+# How it works
+# ---------------------------------------------------------------------------
+#
+# Two independent rules determine the release:
+# - Whether a release happens depends on whether the change modifies a file
+#   included in the published crate.
+# - Which version is released depends on the commit messages. The required
+#   commit message format is documented in CONTRIBUTING.md.
+#
+# Crates.io versions are immutable. They can be yanked but never replaced.
+# Therefore, publishing on a merge means automatically releasing a new version,
+# with the version number determined automatically. Both tasks are handled in
+# two jobs. Example of a release with a minor bump from `0.1.0` to `0.2.0`:
+#
+#   a `feat!:` commit is merged into main
+#           |
+#           +-- job `release-plz-pr`: opens (or updates) a release pull request
+#           |   titled "chore: release v0.2.0" whose entire diff is the version
+#           |   bump in Cargo.toml and Cargo.lock.
+#           |
+#   the release PR is merged into main
+#           |
+#           +-- job `release-plz-release`: notices Cargo.toml says 0.2.0 while
+#               crates.io says 0.1.0, so it runs `cargo publish`, creates the
+#               `v0.2.0` git tag, and creates a GitHub Release
+#
+# `semver_check` in release-plz.toml also verifies the proposed version bump
+# against the actual public API, preventing a breaking change from being
+# released as a patch even when the commit message indicates otherwise.
+#
+# ALTERNATIVE: release without a release PR.
+# The version can instead be bumped manually in Cargo.toml as part of the
+# feature PR. `release-plz-release` publishes any version on `main` that is not
+# yet on crates.io, so the release happens as soon as that PR is merged. No
+# changes to this workflow are needed, but Cargo.lock must be updated alongside
+# Cargo.toml. CI uses `--locked`, so an out-of-sync lockfile causes checks to
+# fail.
+#
+# ---------------------------------------------------------------------------
+# Authentication: trusted publishing, not a stored token
+# ---------------------------------------------------------------------------
+#
+# No CARGO_REGISTRY_TOKEN secret is required. crates.io supports OIDC trusted
+# publishing, which exchanges a short-lived GitHub identity token for a
+# temporary registry token. release-plz supports this natively and requires
+# only the `id-token: write` permission below. This avoids storing or rotating
+# long-lived publishing credentials.
+#
+# Reference: https://crates.io/docs/trusted-publishing
+#
+# ONE-TIME SETUP REQUIRED — crates.io:
+#   <crate> > Settings > Trusted Publishing > Add
+#     Repository owner: <GitHub username>
+#     Repository name: <repository>
+#     Workflow filename: release.yml
+#     Environment: (leave empty)
+#
+# ONE-TIME SETUP REQUIRED — GitHub:
+#   Repository settings > Actions > General > Workflow permissions
+#     Enable "Allow GitHub Actions to create and approve pull requests"
+#   This permission is required for release-plz to open release PRs.
+#
+# ---------------------------------------------------------------------------
+# Checks on the release PR need manual approval
+# ---------------------------------------------------------------------------
+#
+# The release PR is created using the automatic GITHUB_TOKEN. As an
+# anti-recursion measure, GitHub does not let events triggered by GITHUB_TOKEN
+# start workflow runs on their own. For the `opened`, `synchronize`, and
+# `reopened` pull request activity types, the runs are still created, but in an
+# approval-required state. The release PR shows an "Approval required" banner,
+# and the checks only start once someone with write access selects "Approve
+# workflows to run".
+#
+# This matters when workflow jobs are required status checks in branch
+# protection. Until the runs are approved, those checks report nothing, and the
+# release PR cannot be merged.
+#
+# Reference: https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow
+
+name: release
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release-plz-pr:
+    name: release-plz PR
+    runs-on: ubuntu-latest
+    # Only this repository releases this crate. Forks and any other repository
+    # this workflow is copied into skip the job instead of failing it.
+    if: ${{ github.repository == 'ni-kr/tayna' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    # Concurrent runs would conflict over the same release branch, so an
+    # in-progress run is allowed to finish rather than being cancelled.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: stable
+      - name: Run release-plz
+        uses: release-plz/action@f393a7b38aca9d9b4c58447b291dbac963901df6 # tag=v0.5.141
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-plz-release:
+    name: release-plz release
+    runs-on: ubuntu-latest
+    # Only this repository releases this crate. Forks and any other repository
+    # this workflow is copied into skip the job instead of failing it.
+    if: ${{ github.repository == 'ni-kr/tayna' }}
+    permissions:
+      contents: write
+      pull-requests: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: stable
+      - name: Run release-plz
+        uses: release-plz/action@f393a7b38aca9d9b4c58447b291dbac963901df6 # tag=v0.5.141
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

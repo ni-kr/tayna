@@ -1,0 +1,169 @@
+# This workflow answers the question: Does the code actually work?
+#
+# It runs on every pull request and every push to `main` and is the main CI
+# workflow.
+#
+# Jobs:
+# - required: the test suite on ubuntu, on stable and beta
+# - minimal: the test suite against the minimal versions of the dependencies
+#   that satisfy the requirements of this crate, and its dependencies
+# - os-check: the test suite on macOS and Windows
+# - coverage: the test suite with coverage, uploaded to codecov.io
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+name: test
+
+jobs:
+  required:
+    runs-on: ubuntu-latest
+    name: ubuntu / ${{ matrix.toolchain }}
+    strategy:
+      matrix:
+        # `beta` catches potential breakage before the next stable release. Only
+        # the `stable` job needs to be marked as a required status check in
+        # branch protection.
+        toolchain: [stable, beta]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - name: cargo generate-lockfile
+        if: hashFiles('Cargo.lock') == ''
+        run: cargo generate-lockfile
+      - name: cargo test --locked
+        run: cargo test --locked --all-features --all-targets
+      # `--all-targets` silently skips doc-tests, so they need a separate run.
+      - name: cargo test --doc
+        run: cargo test --locked --all-features --doc
+
+  minimal:
+    # Cargo normally resolves dependencies to the newest compatible versions,
+    # so the minimum versions declared in Cargo.toml may never be tested.
+    # `-Zminimal-versions` resolves every dependency to the minimal permitted
+    # version, catching accidental reliance on newer APIs.
+    #
+    # This check can be difficult to pass, because it also applies to transitive
+    # dependencies, which frequently under-declare their own requirements. If it
+    # fails for that reason, the workaround is to raise the minimum artificially
+    # without affecting the real build graph:
+    #
+    # ```toml
+    # # Not a real dependency. `any()` is an empty OR, so the predicate is false
+    # # for every target and the edge is never added to the build graph. The
+    # # resolver is target-agnostic though, so the requirement still takes part
+    # # in version selection and lifts the transitive dependency to a version
+    # # that works.
+    # [target.'cfg(any())'.dependencies]
+    # some-transitive-dep = "X.Y.Z"
+    # ```
+    #
+    # The alternative `-Zdirect-minimal-versions` flag minimises only direct
+    # dependencies while selecting the newest compatible transitive versions.
+    runs-on: ubuntu-latest
+    name: ubuntu / stable / minimal-versions
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: stable
+      - name: Install nightly for -Zminimal-versions
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: nightly
+      # Nightly is needed only to resolve the minimal versions. The actual test
+      # run happens on stable.
+      - name: rustup default stable
+        run: rustup default stable
+      - name: cargo update -Zminimal-versions
+        run: cargo +nightly update -Zminimal-versions
+      - name: cargo test
+        run: cargo test --locked --all-features --all-targets
+
+  os-check:
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }} / stable
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: stable
+      - name: cargo generate-lockfile
+        if: hashFiles('Cargo.lock') == ''
+        run: cargo generate-lockfile
+      - name: cargo test
+        run: cargo test --locked --all-features --all-targets
+
+  coverage:
+    # ONE-TIME SETUP REQUIRED: this job needs a `CODECOV_TOKEN` repository
+    # secret, obtained from
+    #
+    #   https://app.codecov.io/gh/<GitHub username>/<repository>/settings
+    #
+    # and it must be added in two places:
+    #
+    # - Repository settings > Secrets and variables > Actions
+    # - Repository settings > Secrets and variables > Dependabot
+    #
+    # The Dependabot entry is required for coverage uploads to succeed on
+    # Dependabot pull requests. Pull requests from forks cannot access the
+    # secret, but codecov accepts tokenless uploads in that case. Details:
+    # https://github.com/codecov/feedback/issues/112
+    runs-on: ubuntu-latest
+    name: ubuntu / stable / coverage
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - name: cargo install cargo-llvm-cov
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # tag=v2.85.4
+        with:
+          tool: cargo-llvm-cov
+      - name: cargo generate-lockfile
+        if: hashFiles('Cargo.lock') == ''
+        run: cargo generate-lockfile
+      - name: cargo llvm-cov
+        run: cargo llvm-cov --locked --all-features --lcov --output-path lcov.info
+      - name: Record Rust version and runner OS
+        run: |
+          echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
+          echo "OS=$RUNNER_OS" >> "$GITHUB_ENV"
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # tag=v7.0.0
+        with:
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+          env_vars: OS,RUST

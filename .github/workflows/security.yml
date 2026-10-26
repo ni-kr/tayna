@@ -1,0 +1,62 @@
+# This workflow answers the question: Can we still trust what we depend on?
+#
+# cargo-deny reads .config/deny.toml and runs four independent checks:
+# - advisories: no known vulnerabilities, yanked crates, or unmaintained
+#   crates are present
+# - bans: no duplicate crate versions or wildcard version requirements
+# - licenses: every license in the tree is on the allow-list
+# - sources: every crate comes from an allowed source
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Runs every Monday at 08:25 UTC.
+    - cron: '25 8 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+name: security
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    name: cargo-deny / ${{ matrix.checks }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The groups are separated because their failure modes differ:
+        #
+        # - `advisories` depends on the evolving RustSec database and can fail
+        #   even when a pull request changes only comments. It is therefore not
+        #   suitable as a required status check in branch protection, but
+        #   failures still need attention.
+        #
+        # - `bans licenses sources` depends only on Cargo.lock and can fail only
+        #   when dependencies change, making it suitable as a required status
+        #   check in branch protection.
+        checks:
+          - advisories
+          - bans licenses sources
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # tag=v2.1.1
+        with:
+          command: check ${{ matrix.checks }}
+          arguments: --all-features --config .config/deny.toml
+          # `advisory-not-detected` fires when an entry in .config/deny.toml's
+          # `ignore` list no longer matches anything in the dependency graph, ie
+          # the advisory was withdrawn or the offending dependency is gone. It
+          # is a warning by default. Promoting it to an error means obsolete
+          # ignores get cleaned up.
+          command-arguments: -D advisory-not-detected

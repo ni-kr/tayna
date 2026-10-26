@@ -1,0 +1,49 @@
+# Configuration for cargo-deny, run by .github/workflows/security.yml.
+#
+# cargo-deny inspects the entire dependency tree, including transitive
+# dependencies, and answers four questions:
+# - advisories: Does anything in the tree have a known security vulnerability?
+# - licenses: Is every license in the tree on the allow-list below?
+# - bans: Are there duplicate or forbidden crates?
+# - sources: Did every crate come from somewhere we trust?
+#
+# NOTE: cargo-deny does not auto-discover this file, so `--config` is required.
+# Otherwise, it silently falls back to its built-in defaults.
+#
+# Reference: https://embarkstudios.github.io/cargo-deny/checks/cfg.html
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+# If an advisory has no fix or does not apply, it can be ignored with a
+# documented reason:
+# ignore = [
+#     { id = "RUSTSEC-0000-0000", reason = "not reachable from code paths" },
+# ]
+ignore = []
+
+[licenses]
+# A dependency carrying anything not named here fails the check and has to be
+# reviewed deliberately.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+# Every dependency must come from crates.io. Git dependencies are prohibited
+# because a force-push can change the source without changing its version.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

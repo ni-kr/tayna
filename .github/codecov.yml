@@ -1,0 +1,21 @@
+# Configuration for codecov.io, which receives the coverage report uploaded by
+# the `coverage` job in .github/workflows/test.yml and annotates pull requests.
+#
+# Reference: https://docs.codecov.com/docs/codecovyml-reference
+
+coverage:
+  range: 85..100
+  round: down
+  precision: 1
+  status:
+    # https://docs.codecov.com/docs/commit-status
+    project:
+      default:
+        # Coverage can vary slightly between runs for reasons unrelated to the
+        # change under review. This tolerance prevents failures due to noise.
+        threshold: 1%
+ignore:
+  - "tests"
+comment:
+  layout: "files"
+  require_changes: true
