@@ -1,0 +1,160 @@
+# This workflow answers the question: Does the code pass quality and build
+# checks?
+#
+# It runs on every pull request and on every push to `main`, and contains fast,
+# compile-time checks. Runtime tests are handled separately in `test.yml`.
+#
+# Jobs:
+# - fmt: the code is formatted according to rustfmt
+# - clippy: the code triggers no clippy warnings (stable and beta)
+# - semver: the public API does not break semver against the published crate
+# - doc: the code can be documented without errors
+# - hack: every combination of feature flags compiles
+# - msrv: the `rust-version` declared in Cargo.toml is actually buildable
+
+permissions:
+  contents: read
+
+# Restricting the push trigger to `main` means a PR branch is built once (for
+# the `pull_request` event) rather than twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# If new commits are pushed to a PR branch, any run still in progress for
+# that same PR is cancelled. This saves CI time and returns results faster.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+name: check
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    name: stable / fmt
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    name: ${{ matrix.toolchain }} / clippy
+    strategy:
+      fail-fast: false
+      matrix:
+        # `beta` gives early warning of new lints and may fail. Only the
+        # `stable` job needs to be marked as a required status check in branch
+        # protection.
+        toolchain: [stable, beta]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+      - name: cargo clippy
+        run: cargo clippy --locked --all-features --all-targets -- -D warnings
+
+  semver:
+    # The public API of this checkout is compared against the version published
+    # on crates.io and fails if a change is breaking but the version bump is
+    # not. This is what makes the automated releases in release.yml safe. An
+    # accidental breaking change is caught here, before it is published.
+    runs-on: ubuntu-latest
+    name: semver
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: stable
+      - name: cargo-semver-checks
+        uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # tag=v2.9
+
+  doc:
+    # `cargo docs-rs` reproduces the docs.rs build and requires nightly because
+    # it passes `-Zunstable-options` to rustdoc. Its feature set comes from
+    # `[package.metadata.docs.rs] in Cargo.toml.
+    runs-on: ubuntu-latest
+    name: nightly / doc
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install nightly
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: nightly
+      - name: Install cargo-docs-rs
+        uses: dtolnay/install@982daea0f5d846abc3c83e01a6a1d73c040047c1 # branch=cargo-docs-rs
+      - name: cargo docs-rs
+        run: cargo docs-rs
+
+  hack:
+    # Cargo features are supposed to be additive. Enabling one must never
+    # remove or change behaviour, because when two crates in a dependency graph
+    # ask for different features of this crate, cargo unifies them. cargo-hack
+    # compiles every combination to prove that holds.
+    runs-on: ubuntu-latest
+    name: ubuntu / stable / features
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: stable
+      - name: cargo install cargo-hack
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # tag=v2.85.4
+        with:
+          tool: cargo-hack
+      # There is intentionally no target specifier.
+      # https://github.com/jonhoo/rust-ci-conf/pull/4
+      - name: cargo hack
+        run: cargo hack --feature-powerset check
+
+  msrv:
+    runs-on: ubuntu-latest
+    # A matrix is used here because `env` cannot be referenced in job names.
+    strategy:
+      matrix:
+        msrv: ["1.85.0"] # Must stay in sync with `rust-version` in Cargo.toml
+    name: ubuntu / ${{ matrix.msrv }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install ${{ matrix.msrv }}
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: ${{ matrix.msrv }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # tag=v6.1.0
+        with:
+          path: ~/.cargo
+          key: ${{ runner.os }}-cargo
+      - name: cargo +${{ matrix.msrv }} check
+        run: cargo check --locked --all-features

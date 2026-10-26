@@ -1,0 +1,84 @@
+# This workflow answers the question: Did the outside world break us?
+#
+# The checks in check.yml and test.yml run in response to code changes. But a
+# crate can break without a single commit: the compiler moves on, and so do its
+# dependencies. This workflow runs daily, so breakage that no commit caused
+# surfaces early. The push and pull request triggers are secondary. They report
+# the same jobs against the change at hand.
+#
+# This workflow is expected to go red sometimes. Its jobs should not be required
+# status checks in branch protection.
+#
+# Jobs:
+# - nightly: the test suite on the nightly compiler
+# - update: the test suite against the newest compatible dependency versions,
+#   with deprecated APIs treated as errors
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Runs daily at 05:28 UTC.
+    - cron: '28 5 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+name: rolling
+
+jobs:
+  nightly:
+    # Nightly is roughly 12 weeks ahead of stable, providing time to identify
+    # regressions and report them to the compiler team before they reach stable.
+    runs-on: ubuntu-latest
+    name: ubuntu / nightly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install nightly
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: nightly
+      - name: cargo generate-lockfile
+        if: hashFiles('Cargo.lock') == ''
+        run: cargo generate-lockfile
+      - name: cargo test --locked
+        run: cargo test --locked --all-features --all-targets
+
+  update:
+    # The committed Cargo.lock and `--locked` keep CI reproducible, but prevent
+    # it from testing newer compatible dependency versions a new user gets,
+    # since `cargo add` resolves to the newest semver-compatible releases. This
+    # job runs `cargo update` and re-runs the tests with those versions. It also
+    # treats deprecated API usage as an error, catching deprecations while
+    # migration is still possible.
+    runs-on: ubuntu-latest
+    name: ubuntu / beta / updated
+    # This job is only useful when Cargo.lock is committed, otherwise it repeats
+    # the regular test job. Since `hashFiles` is only available in step-level
+    # `if` conditions, the check must be repeated for each step.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install beta
+        if: hashFiles('Cargo.lock') != ''
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: beta
+      - name: cargo update
+        if: hashFiles('Cargo.lock') != ''
+        run: cargo update
+      - name: cargo test
+        if: hashFiles('Cargo.lock') != ''
+        run: cargo test --locked --all-features --all-targets
+        env:
+          RUSTFLAGS: -D deprecated

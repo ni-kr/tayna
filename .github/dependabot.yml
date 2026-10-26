@@ -1,0 +1,37 @@
+# Dependabot keeps dependencies current by opening pull requests. Those PRs go
+# through the full CI suite like any other, so breaking updates are caught
+# before they are merged.
+#
+# Reference: https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference
+
+version: 2
+updates:
+  # GitHub Actions are pinned to immutable commit SHAs. Dependabot keeps these
+  # pins up to date and records the corresponding version in the trailing
+  # comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      # Patch and minor updates are grouped into one PR. Major updates remain
+      # separate for easier review.
+      gha-bump:
+        applies-to: version-updates
+        update-types:
+          - "patch"
+          - "minor"
+  # Dependabot updates Cargo dependencies declared in Cargo.toml and resolved in
+  # Cargo.lock. A pure library can afford to ignore patch and minor updates,
+  # because its consumers resolve dependencies with their own lockfile. This
+  # crate also ships a binary, and `cargo install` builds it from the committed
+  # lockfile, so updates stay enabled here.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: daily
+    # ignore:
+    #   - dependency-name: "*"
+    #     update-types:
+    #       - "version-update:semver-patch"
+    #       - "version-update:semver-minor"

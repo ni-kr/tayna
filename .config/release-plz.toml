@@ -1,0 +1,30 @@
+# Configuration for release-plz, run by .github/workflows/release.yml.
+#
+# release-plz runs the automated release.
+#
+# Reference: https://release-plz.dev/docs/config
+
+[workspace]
+
+# CHANGELOG.md updates are disabled because the file is deliberately omitted
+# from the repository. Release notes still exist. They are produced by GitHub
+# instead. See `git_release_generate_notes` below.
+changelog_update = false
+git_tag_enable = true
+git_release_enable = true
+# Let GitHub generate release notes, without committing a generated file to the
+# repository.
+git_release_generate_notes = true
+# GitHub appends its generated notes after whatever body release-plz supplies.
+# An empty body therefore means "use only GitHub's generated notes". Left
+# non-empty it would try to render the changelog that is disabled.
+git_release_body = ""
+git_release_type = "auto"
+semver_check = true
+allow_dirty = false
+# `cargo publish`'s verification build is kept enabled.
+publish_no_verify = false
+# Preparing a release refreshes only the workspace's own entries in Cargo.lock
+# rather than every transitive dependency at the same time. Dependency updates
+# belong in their own Dependabot PRs, where they get a full CI run.
+dependencies_update = false
