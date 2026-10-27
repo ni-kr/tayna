@@ -24,6 +24,11 @@ semver_check = true
 allow_dirty = false
 # `cargo publish`'s verification build is kept enabled.
 publish_no_verify = false
+# After uploading, release-plz waits for the new version to appear in the
+# crates.io index before it creates a tag and the GitHub Release. Only once that
+# wait succeeds is the release complete. The two-hour timeout accommodates
+# delays in index propagation.
+publish_timeout = "120m"
 # Preparing a release refreshes only the workspace's own entries in Cargo.lock
 # rather than every transitive dependency at the same time. Dependency updates
 # belong in their own Dependabot PRs, where they get a full CI run.
