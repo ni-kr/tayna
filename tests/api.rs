@@ -38,12 +38,15 @@ fn builder_methods_compose() {
         .lowercase(true)
         .lowercase(false)
         .require_each_enabled_class(true)
+        .exclude_ambiguous(true)
+        .exclude_ambiguous(false)
         .build()
         .expect("valid policy");
 
     assert_eq!(policy.classes(), CharClass::Uppercase | CharClass::Digits);
     assert_eq!(policy.length(), 16);
     assert!(policy.requires_each_enabled_class());
+    assert!(!policy.excludes_ambiguous());
 }
 
 #[test]
@@ -58,6 +61,35 @@ fn a_policy_needs_nothing_but_a_length() {
         policy.alphabet(),
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*"
     );
+}
+
+#[test]
+fn a_policy_without_ambiguous_characters_only_drops_confusable_ones() {
+    let readable = PasswordPolicy::builder()
+        .length(32)
+        .exclude_ambiguous(true)
+        .build()
+        .expect("valid policy");
+
+    assert!(readable.excludes_ambiguous());
+    assert_eq!(
+        readable.alphabet(),
+        "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*"
+    );
+
+    let password = readable.generate();
+
+    assert!(!password.as_str().chars().any(|c| "0O1Il".contains(c)));
+
+    // Digits alone hold nothing that can be mistaken for a `0` or a `1`.
+    let pin = PasswordPolicy::builder()
+        .length(6)
+        .classes(CharClass::Digits)
+        .exclude_ambiguous(true)
+        .build()
+        .expect("valid policy");
+
+    assert_eq!(pin.alphabet(), "0123456789");
 }
 
 #[test]
@@ -147,4 +179,19 @@ fn character_class_sets_expose_their_properties() {
     assert!(!set.contains(CharClass::Symbols));
     assert_eq!(set.to_string(), "lowercase+digits");
     assert_eq!(set.alphabet(), "abcdefghijklmnopqrstuvwxyz0123456789");
+}
+
+#[test]
+fn character_class_sets_resolve_ambiguous_characters_against_their_members() {
+    let digits_and_letters = CharClass::Digits | CharClass::Uppercase;
+
+    assert_eq!(digits_and_letters.ambiguous_chars(), "IO01");
+    assert!(!digits_and_letters.unambiguous_alphabet().contains('0'));
+    assert!(!digits_and_letters.unambiguous_alphabet().contains('O'));
+
+    // Without upper-case letters there is no `O` to mistake a `0` for.
+    let digits_only = CharClassSet::from(CharClass::Digits);
+
+    assert_eq!(digits_only.ambiguous_chars(), "");
+    assert_eq!(digits_only.unambiguous_alphabet(), digits_only.alphabet());
 }
