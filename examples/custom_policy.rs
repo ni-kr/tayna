@@ -29,6 +29,18 @@ fn main() -> Result<(), PolicyError> {
         .build()?;
     report("Numeric policy", &pin);
 
+    // Ambiguous characters can be excluded.
+    let readable = PasswordPolicy::builder()
+        .length(30)
+        .lowercase(false)
+        .exclude_ambiguous(true)
+        .build()?;
+    report("Readable policy (no ambiguous characters)", &readable);
+    println!(
+        "  Dropped from alphabet: {}\n",
+        readable.classes().ambiguous_chars()
+    );
+
     // A policy is validated once and can then be reused cheaply.
     let batch: Vec<String> = (0..3).map(|_| strong.generate().into_string()).collect();
     println!("A batch of {} passwords:", batch.len());
