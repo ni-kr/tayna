@@ -18,7 +18,7 @@ const EXIT_IO_ERROR: u8 = 1;
 ///
 /// Passwords are built from upper-case letters, lower-case letters, digits, and
 /// symbols. Each character class can be disabled individually, but at least one
-/// class must remain enabled.
+/// class must remain enabled. Ambiguous characters can also be excluded.
 #[derive(Debug, Parser)]
 #[command(name = "tayna", version)]
 #[expect(
@@ -46,6 +46,10 @@ struct Cli {
     #[arg(short = 'S', long)]
     no_symbols: bool,
 
+    /// Exclude ambiguous characters when look-alikes are present (0O1Il)
+    #[arg(long)]
+    no_ambiguous: bool,
+
     /// Do not force each enabled character class to appear
     #[arg(long)]
     allow_missing_classes: bool,
@@ -69,6 +73,7 @@ impl Cli {
             .lowercase(!self.no_lowercase)
             .digits(!self.no_digits)
             .symbols(!self.no_symbols)
+            .exclude_ambiguous(self.no_ambiguous)
             .require_each_enabled_class(!self.allow_missing_classes)
             .build()
     }
@@ -226,6 +231,33 @@ mod tests {
         let policy = cli.policy().unwrap();
 
         assert!(!policy.requires_each_enabled_class());
+    }
+
+    #[test]
+    fn ambiguous_characters_are_included_by_default() {
+        let cli = Cli::try_parse_from(["tayna", "12"]).unwrap();
+        let policy = cli.policy().unwrap();
+
+        assert!(!policy.excludes_ambiguous());
+        assert!(policy.alphabet().contains('0'));
+    }
+
+    #[test]
+    fn no_ambiguous_excludes_ambiguous_characters() {
+        let cli = Cli::try_parse_from(["tayna", "12", "--no-ambiguous"]).unwrap();
+        let policy = cli.policy().unwrap();
+
+        assert!(policy.excludes_ambiguous());
+        assert!(!policy.alphabet().chars().any(|c| "0O1Il".contains(c)));
+    }
+
+    #[test]
+    fn no_ambiguous_keeps_unambiguous_characters() {
+        // Nothing in a digits-only alphabet can be mistaken for a `0`.
+        let cli = Cli::try_parse_from(["tayna", "12", "--no-ambiguous", "-U", "-L", "-S"]).unwrap();
+        let policy = cli.policy().unwrap();
+
+        assert_eq!(policy.alphabet(), CharClass::Digits.chars());
     }
 
     #[test]
