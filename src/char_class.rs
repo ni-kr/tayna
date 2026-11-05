@@ -8,6 +8,21 @@ const LOWERCASE_CHARS: &str = "abcdefghijklmnopqrstuvwxyz";
 const DIGIT_CHARS: &str = "0123456789";
 const SYMBOL_CHARS: &str = "!@#$%^&*";
 
+/// Groups of characters that are easy to mistake for one another, each member
+/// paired with the class it belongs to.
+///
+/// A character is only genuinely ambiguous while another member of its group is
+/// also part of the alphabet, which is why the class is recorded alongside it.
+/// For example, `0` is harmless unless upper-case letters contribute an `O`.
+const AMBIGUOUS_GROUPS: [&[(CharClass, char)]; 2] = [
+    &[(CharClass::Digits, '0'), (CharClass::Uppercase, 'O')],
+    &[
+        (CharClass::Digits, '1'),
+        (CharClass::Uppercase, 'I'),
+        (CharClass::Lowercase, 'l'),
+    ],
+];
+
 /// One of the building blocks a password can be composed from.
 ///
 /// A password alphabet is the concatenation of the character classes enabled in
@@ -249,6 +264,80 @@ impl CharClassSet {
             alphabet.push_str(class.chars());
         }
         alphabet
+    }
+
+    /// The characters this set makes visually ambiguous, in alphabet order.
+    ///
+    /// The characters `0`, `O`, `1`, `I`, and `l` are only hard to tell apart while
+    /// the alphabet holds more than one of them. A character is therefore reported
+    /// only if a class enabled in this set contributes a character it can be
+    /// confused with. Otherwise it is unmistakable and stays.
+    ///
+    /// # Examples
+    /// ```
+    /// use tayna::{CharClass, CharClassSet};
+    ///
+    /// // `O` and `I` can be read as `0` and `1`, and the other way round.
+    /// let uppercase_and_digits = CharClass::Uppercase | CharClass::Digits;
+    /// assert_eq!(uppercase_and_digits.ambiguous_chars(), "IO01");
+    ///
+    /// // On their own, digits cannot be confused with anything.
+    /// assert_eq!(CharClassSet::from(CharClass::Digits).ambiguous_chars(), "");
+    /// ```
+    #[must_use]
+    pub fn ambiguous_chars(self) -> String {
+        let mut ambiguous = self.alphabet();
+        ambiguous.retain(|character| self.is_ambiguous(character));
+        ambiguous
+    }
+
+    /// The alphabet spanned by this set, without the characters it makes
+    /// visually ambiguous.
+    ///
+    /// This is [`alphabet`](Self::alphabet) minus
+    /// [`ambiguous_chars`](Self::ambiguous_chars). No class can lose all of its
+    /// characters this way, so the result is non-empty for every non-empty set.
+    ///
+    /// # Examples
+    /// ```
+    /// use tayna::{CharClass, CharClassSet};
+    ///
+    /// let set = CharClass::Lowercase | CharClass::Digits;
+    ///
+    /// // `l` and `1` are dropped, but `0` survives. Without `O` it is unambiguous.
+    /// assert_eq!(set.ambiguous_chars(), "l1");
+    /// assert_eq!(
+    ///     set.unambiguous_alphabet(), "abcdefghijkmnopqrstuvwxyz023456789"
+    /// );
+    /// ```
+    #[must_use]
+    pub fn unambiguous_alphabet(self) -> String {
+        let mut alphabet = self.alphabet();
+        alphabet.retain(|character| !self.is_ambiguous(character));
+        alphabet
+    }
+
+    /// Returns `true` if `character` belongs to a class in this set and shares its
+    /// group with at least one other character this set contributes.
+    fn is_ambiguous(self, character: char) -> bool {
+        AMBIGUOUS_GROUPS.iter().any(|group| {
+            // Track whether this set contributes the character being checked.
+            let mut contributes_character = false;
+
+            // Count how many classes represented in this group are enabled.
+            let mut enabled_group_classes = 0usize;
+
+            for &(class, member) in *group {
+                if self.contains(class) {
+                    contributes_character |= member == character;
+                    enabled_group_classes += 1;
+                }
+            }
+
+            // A character is ambiguous only if it is present alongside at least one other
+            // member of its group.
+            contributes_character && enabled_group_classes > 1
+        })
     }
 }
 
@@ -580,6 +669,123 @@ mod tests {
                 "uppercase+lowercase+digits+symbols"
             );
             assert_eq!(CharClassSet::EMPTY.to_string(), "none");
+        }
+    }
+
+    mod ambiguity {
+        use super::*;
+        use crate::char_class::AMBIGUOUS_GROUPS;
+
+        /// Every set of character classes, including the empty one.
+        fn all_sets() -> impl Iterator<Item = CharClassSet> {
+            (CharClassSet::EMPTY.0..=CharClassSet::ALL.0).map(CharClassSet)
+        }
+
+        #[test]
+        fn groups_pair_each_character_with_the_class_that_holds_it() {
+            for group in AMBIGUOUS_GROUPS {
+                for &(class, character) in group {
+                    assert!(class.chars().contains(character),);
+                }
+            }
+        }
+
+        #[test]
+        fn groups_are_disjoint_and_each_holds_at_least_two_characters() {
+            let mut seen = Vec::new();
+            for group in AMBIGUOUS_GROUPS {
+                assert!(group.len() > 1);
+                for &(_, character) in group {
+                    assert!(!seen.contains(&character));
+                    seen.push(character);
+                }
+            }
+        }
+
+        #[test]
+        fn a_single_class_never_makes_anything_ambiguous() {
+            for class in CharClass::ALL {
+                let set = CharClassSet::from(class);
+
+                assert_eq!(set.ambiguous_chars(), "");
+                assert_eq!(set.unambiguous_alphabet(), set.alphabet());
+            }
+        }
+
+        #[test]
+        fn ambiguity_depends_on_which_classes_are_enabled() {
+            let cases = [
+                (CharClass::Uppercase | CharClass::Digits, "IO01"),
+                (CharClass::Lowercase | CharClass::Digits, "l1"),
+                (CharClass::Uppercase | CharClass::Lowercase, "Il"),
+                (CharClass::Digits | CharClass::Symbols, ""),
+                (CharClassSet::ALL, "IOl01"),
+            ];
+
+            for (set, expected) in cases {
+                assert_eq!(set.ambiguous_chars(), expected);
+            }
+        }
+
+        #[test]
+        fn unambiguous_alphabet_is_the_alphabet_minus_the_ambiguous_characters() {
+            for set in all_sets() {
+                let ambiguous = set.ambiguous_chars();
+                let expected: String = set
+                    .alphabet()
+                    .chars()
+                    .filter(|character| !ambiguous.contains(*character))
+                    .collect();
+
+                assert_eq!(set.unambiguous_alphabet(), expected);
+            }
+        }
+
+        #[test]
+        fn no_enabled_class_loses_all_of_its_characters() {
+            for set in all_sets() {
+                for class in set {
+                    assert!(
+                        set.unambiguous_alphabet()
+                            .chars()
+                            .any(|character| class.chars().contains(character))
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn unambiguous_alphabet_only_holds_characters_of_enabled_classes() {
+            for set in all_sets() {
+                for character in set.unambiguous_alphabet().chars() {
+                    assert!(set.iter().any(|class| class.chars().contains(character)));
+                }
+            }
+        }
+
+        #[test]
+        fn unambiguous_alphabet_keeps_each_class_contiguous() {
+            for set in all_sets() {
+                let ambiguous = set.ambiguous_chars();
+                let expected: String = set
+                    .iter()
+                    .flat_map(|class| class.chars().chars())
+                    .filter(|character| !ambiguous.contains(*character))
+                    .collect();
+
+                assert_eq!(set.unambiguous_alphabet(), expected);
+            }
+        }
+
+        #[test]
+        fn symbols_are_never_ambiguous() {
+            for set in all_sets() {
+                assert!(
+                    !set.ambiguous_chars()
+                        .chars()
+                        .any(|character| CharClass::Symbols.chars().contains(character))
+                );
+            }
         }
     }
 
