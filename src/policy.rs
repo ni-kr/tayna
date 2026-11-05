@@ -38,6 +38,7 @@ pub struct PasswordPolicy {
     length: usize,
     classes: CharClassSet,
     require_each_enabled_class: bool,
+    exclude_ambiguous: bool,
     alphabet: String,
 }
 
@@ -50,8 +51,9 @@ impl PasswordPolicy {
 
     /// Starts building a policy.
     ///
-    /// The returned builder enables all four character classes and requires at
-    /// least one character from each; only the length still has to be set.
+    /// The returned builder enables all four character classes, requires at
+    /// least one character from each, and keeps visually ambiguous characters;
+    /// only the length still has to be set.
     ///
     /// # Examples
     /// ```
@@ -85,8 +87,22 @@ impl PasswordPolicy {
         self.require_each_enabled_class
     }
 
+    /// Whether visually ambiguous characters are kept out of the alphabet.
+    ///
+    /// The characters covered by this setting, and the conditions under which
+    /// they are considered ambiguous, are described in
+    /// [`PasswordPolicyBuilder::exclude_ambiguous`].
+    #[must_use]
+    pub const fn excludes_ambiguous(&self) -> bool {
+        self.exclude_ambiguous
+    }
+
     /// The characters in this policy's alphabet, with character classes in
     /// canonical order.
+    ///
+    /// Characters excluded by
+    /// [`exclude_ambiguous`](PasswordPolicyBuilder::exclude_ambiguous) are
+    /// already gone from it.
     ///
     /// # Examples
     /// ```
@@ -154,7 +170,7 @@ impl PasswordPolicy {
             // construction. This can never overshoot `length`: see the compile-time
             // assertion below.
             for class in self.classes {
-                bytes.push(pick(class.chars().as_bytes(), rng));
+                bytes.push(pick(&class_pool(&self.alphabet, class), rng));
             }
         }
 
@@ -180,11 +196,27 @@ impl PasswordPolicy {
     }
 }
 
+/// Returns the characters of `class` present in `alphabet`, in their original
+/// order.
+///
+/// The pool is extracted from the alphabet rather than taken directly from
+/// [`CharClass::chars`]. This preserves any exclusions already applied by the
+/// policy without needing to know which characters were excluded. Since the
+/// entire alphabet is searched, the result is also independent of how its
+/// classes are ordered or grouped.
+fn class_pool(alphabet: &str, class: CharClass) -> Vec<u8> {
+    alphabet
+        .bytes()
+        .filter(|byte| class.chars().as_bytes().contains(byte))
+        .collect()
+}
+
 /// Picks one element uniformly at random.
 ///
-/// `pool` is never empty: class alphabets are non-empty compile-time constants
-/// and a policy's alphabet is non-empty by construction, so the range passed to
-/// `random_range` is never degenerate.
+/// `pool` is never empty. A policy's alphabet is non-empty by construction, and
+/// so is every enabled class's share of it, because removing ambiguous
+/// characters can never empty a class. The range passed to `random_range` is
+/// therefore never degenerate.
 fn pick<R: Rng + ?Sized>(pool: &[u8], rng: &mut R) -> u8 {
     pool[rng.random_range(0..pool.len())]
 }
@@ -231,17 +263,19 @@ pub struct PasswordPolicyBuilder {
     length: Option<usize>,
     classes: CharClassSet,
     require_each_enabled_class: bool,
+    exclude_ambiguous: bool,
 }
 
 impl PasswordPolicyBuilder {
     /// Creates a builder with all four character classes enabled, each of them
-    /// required, and no length set.
+    /// required, ambiguous characters allowed, and no length set.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             length: None,
             classes: CharClassSet::ALL,
             require_each_enabled_class: true,
+            exclude_ambiguous: false,
         }
     }
 
@@ -384,6 +418,41 @@ impl PasswordPolicyBuilder {
         self
     }
 
+    /// Excludes visually similar characters when their look-alikes are also
+    /// present: `0`, `O`, `1`, `I`, and `l`.
+    ///
+    /// Characters are excluded in pairs, not unconditionally. A digits-only policy
+    /// therefore retains all digits.
+    ///
+    /// # Examples
+    /// ```
+    /// use tayna::{CharClass, PasswordPolicy};
+    ///
+    /// let readable = PasswordPolicy::builder()
+    ///     .length(16)
+    ///     .exclude_ambiguous(true)
+    ///     .build()?;
+    ///
+    /// assert!(readable.excludes_ambiguous());
+    /// assert!(!readable.alphabet().contains('O'));
+    /// assert!(!readable.alphabet().contains('0'));
+    ///
+    /// // A PIN has nothing to confuse its digits with, so none are lost.
+    /// let pin = PasswordPolicy::builder()
+    ///     .length(6)
+    ///     .classes(CharClass::Digits)
+    ///     .exclude_ambiguous(true)
+    ///     .build()?;
+    ///
+    /// assert_eq!(pin.alphabet(), "0123456789");
+    /// # Ok::<(), tayna::PolicyError>(())
+    /// ```
+    #[must_use]
+    pub const fn exclude_ambiguous(mut self, excluded: bool) -> Self {
+        self.exclude_ambiguous = excluded;
+        self
+    }
+
     /// Validates the settings and produces a [`PasswordPolicy`].
     ///
     /// # Errors
@@ -396,7 +465,8 @@ impl PasswordPolicyBuilder {
     ///
     /// Requiring at least one character from every enabled class is always
     /// satisfiable because [`PasswordPolicy::MIN_LENGTH`] is at least the number of
-    /// character classes.
+    /// character classes, and because excluding ambiguous characters never empties
+    /// a class.
     ///
     /// # Examples
     /// ```
@@ -423,11 +493,18 @@ impl PasswordPolicyBuilder {
             return Err(PolicyError::NoCharacterClasses);
         }
 
+        let alphabet = if self.exclude_ambiguous {
+            self.classes.unambiguous_alphabet()
+        } else {
+            self.classes.alphabet()
+        };
+
         Ok(PasswordPolicy {
             length,
             classes: self.classes,
             require_each_enabled_class: self.require_each_enabled_class,
-            alphabet: self.classes.alphabet(),
+            exclude_ambiguous: self.exclude_ambiguous,
+            alphabet,
         })
     }
 }
@@ -443,7 +520,7 @@ mod tests {
     use rand::SeedableRng as _;
     use rand::rngs::StdRng;
 
-    use super::{PasswordPolicy, PasswordPolicyBuilder};
+    use super::{PasswordPolicy, PasswordPolicyBuilder, class_pool};
     use crate::char_class::{CharClass, CharClassSet};
     use crate::error::PolicyError;
 
@@ -462,6 +539,7 @@ mod tests {
             assert_eq!(builder.length, None);
             assert_eq!(builder.classes, CharClassSet::ALL);
             assert!(builder.require_each_enabled_class);
+            assert!(!builder.exclude_ambiguous);
         }
 
         #[test]
@@ -532,6 +610,50 @@ mod tests {
                 policy.alphabet(),
                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
             );
+        }
+
+        #[test]
+        fn ambiguous_characters_are_kept_by_default() {
+            let policy = PasswordPolicy::builder().length(12).build().unwrap();
+
+            assert!(!policy.excludes_ambiguous());
+            assert_eq!(policy.alphabet(), CharClassSet::ALL.alphabet());
+        }
+
+        #[test]
+        fn excluding_ambiguous_characters_shrinks_the_alphabet() {
+            let policy = PasswordPolicy::builder()
+                .length(12)
+                .exclude_ambiguous(true)
+                .build()
+                .unwrap();
+
+            assert!(policy.excludes_ambiguous());
+            assert_eq!(policy.alphabet(), CharClassSet::ALL.unambiguous_alphabet());
+        }
+
+        #[test]
+        fn excluding_ambiguous_characters_keeps_the_classes_enabled() {
+            let policy = PasswordPolicy::builder()
+                .length(12)
+                .exclude_ambiguous(true)
+                .build()
+                .unwrap();
+
+            assert_eq!(policy.classes(), CharClassSet::ALL);
+        }
+
+        #[test]
+        fn a_character_without_an_enabled_look_alike_is_kept() {
+            // Nothing in a digits-only alphabet can be mistaken for `0` or `1`.
+            let pin = PasswordPolicy::builder()
+                .length(6)
+                .classes(CharClass::Digits)
+                .exclude_ambiguous(true)
+                .build()
+                .unwrap();
+
+            assert_eq!(pin.alphabet(), CharClass::Digits.chars());
         }
     }
 
@@ -757,6 +879,59 @@ mod tests {
             let second = policy.generate_with(&mut seeded()).into_string();
 
             assert_eq!(first, second);
+        }
+
+        #[test]
+        fn class_pool_gathers_that_class_wherever_it_sits_in_the_alphabet() {
+            assert_eq!(class_pool("ABC123", CharClass::Uppercase), b"ABC");
+            assert_eq!(class_pool("123ABC", CharClass::Uppercase), b"ABC");
+            assert_eq!(class_pool("1A2B3C", CharClass::Uppercase), b"ABC");
+            assert_eq!(class_pool("ABC123", CharClass::Symbols), b"");
+        }
+
+        #[test]
+        fn class_pool_holds_only_what_the_alphabet_kept() {
+            let alphabet = (CharClass::Uppercase | CharClass::Digits).unambiguous_alphabet();
+            assert_eq!(
+                class_pool(&alphabet, CharClass::Uppercase),
+                b"ABCDEFGHJKLMNPQRSTUVWXYZ"
+            );
+            assert_eq!(class_pool(&alphabet, CharClass::Digits), b"23456789");
+        }
+
+        #[test]
+        fn required_classes_are_drawn_without_their_excluded_characters() {
+            // `lowest()` always selects the first character of every pool. The digit pool
+            // starts at `0`, so seeding the mandatory digit from the unfiltered class
+            // would reintroduce exactly the character the policy promises to leave out.
+            let policy = PasswordPolicy::builder()
+                .length(8)
+                .classes(CharClass::Uppercase | CharClass::Digits)
+                .exclude_ambiguous(true)
+                .build()
+                .unwrap();
+
+            let password = policy.generate_with(&mut ScriptedRng::lowest());
+
+            assert!(
+                password.as_str().contains('2'),
+                "the mandatory digit should be the first surviving one, got {password:?}"
+            );
+            assert!(!password.as_str().contains('0'));
+        }
+
+        #[test]
+        fn every_required_class_still_appears_when_characters_are_excluded() {
+            let policy = PasswordPolicy::builder()
+                .length(PasswordPolicy::MIN_LENGTH)
+                .exclude_ambiguous(true)
+                .build()
+                .unwrap();
+            let password = policy.generate_with(&mut seeded());
+
+            for class in policy.classes() {
+                assert!(password.as_str().chars().any(|c| class.chars().contains(c)));
+            }
         }
     }
 }
