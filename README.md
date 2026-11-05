@@ -25,6 +25,9 @@ Passwords can be composed from four character classes, all enabled by default:
 | `digits` | `0`–`9` |
 | `symbols` | `!@#$%^&*` |
 
+Ambiguous characters (`0`, `O`, `1`, `I`, and `l`) can also be excluded, but
+only when their look-alikes could appear in the password.
+
 ## 1. Highlights
 
 - **The domain is modelled with types:** Character classes are `CharClass`
@@ -173,6 +176,25 @@ assert!(!policy.requires_each_enabled_class());
 # Ok::<(), tayna::PolicyError>(())
 ```
 
+Ambiguous characters can be excluded, but only when their look-alikes are also
+present in the alphabet. In isolation, these characters are not considered
+ambiguous. For example, `1` and `I`, or `0` and `O`, are both excluded only
+when the policy alphabet includes upper-case letters and digits:
+
+```rust
+use tayna::{CharClass, PasswordPolicy};
+
+let readable = PasswordPolicy::builder()
+    .length(16)
+    .classes(CharClass::Uppercase | CharClass::Digits)
+    .exclude_ambiguous(true)
+    .build()?;
+
+assert!(readable.excludes_ambiguous());
+assert_eq!(readable.alphabet(), "ABCDEFGHJKLMNPQRSTUVWXYZ23456789");
+# Ok::<(), tayna::PolicyError>(())
+```
+
 **`PolicyError`** names each way a policy can be invalid, so callers match on
 the cause instead of parsing a message:
 
@@ -245,6 +267,10 @@ The `--no-*` flags combine freely, except that disabling all character classes
 is a usage error: nothing would be left to draw from. Length must be between 6
 and 128, which are the same bounds the library enforces.
 
+`--no-ambiguous` is the one `--no-*` flag that does not disable a whole class.
+It removes `0`, `O`, `1`, `I`, and `l` where they can be confused with one
+another.
+
 The binary describes every flag, along with its short form and default, in its
 own help output:
 
@@ -263,9 +289,9 @@ written.
 The following outlines tayna's deliberate omissions and helps determine whether
 it fits a particular use case.
 
-- **The alphabet is fixed.** Character classes can be enabled and disabled, but
-  a custom character set cannot be supplied, nor can visually ambiguous
-  characters such as `l`, `1`, `O`, and `0` be excluded.
+- **The alphabet is fixed.** Character classes can be enabled and disabled, and
+  visually ambiguous characters can be excluded, but a custom character set
+  cannot be supplied.
 
 - **Length is capped at 6 to 128 characters.** Six is a common size of a numeric
   PIN. The 128-character upper bound allows long passwords while keeping the
