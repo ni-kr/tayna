@@ -161,6 +161,30 @@ fn allow_missing_classes_is_accepted() {
 }
 
 #[test]
+fn ambiguous_characters_can_be_excluded() {
+    let password = passwords(&["128", "--no-ambiguous"]).remove(0);
+
+    assert_eq!(password.chars().count(), 128);
+    assert!(
+        !password
+            .chars()
+            .any(|c| tayna::CharClassSet::ALL.ambiguous_chars().contains(c)),
+        "--no-ambiguous left a confusable character in {password}"
+    );
+}
+
+#[test]
+fn excluding_ambiguous_characters_spares_those_without_a_look_alike() {
+    let password = passwords(&["128", "--no-ambiguous", "-U", "-L", "-S"]).remove(0);
+
+    assert!(password.chars().all(|c| DIGITS.contains(c)));
+    assert!(
+        password.chars().any(|c| c == '0' || c == '1'),
+        "no digit that is ambiguous elsewhere survived in {password}"
+    );
+}
+
+#[test]
 fn help_lists_all_options() {
     tayna()
         .arg("--help")
@@ -171,6 +195,7 @@ fn help_lists_all_options() {
         .stdout(predicate::str::contains("--no-lowercase"))
         .stdout(predicate::str::contains("--no-digits"))
         .stdout(predicate::str::contains("--no-symbols"))
+        .stdout(predicate::str::contains("--no-ambiguous"))
         .stdout(predicate::str::contains("--allow-missing-classes"))
         .stdout(predicate::str::contains("--count"))
         .stdout(predicate::str::contains("--help"))
