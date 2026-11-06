@@ -1,12 +1,14 @@
 # tayna
 
-[![check](https://github.com/ni-kr/tayna/actions/workflows/check.yml/badge.svg?branch=main&event=push)](https://github.com/ni-kr/tayna/actions/workflows/check.yml?query=branch%3Amain+event%3Apush)
-[![test](https://github.com/ni-kr/tayna/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/ni-kr/tayna/actions/workflows/test.yml?query=branch%3Amain+event%3Apush)
-[![security](https://github.com/ni-kr/tayna/actions/workflows/security.yml/badge.svg)](https://github.com/ni-kr/tayna/actions/workflows/security.yml)
-[![codecov](https://codecov.io/gh/ni-kr/tayna/branch/main/graph/badge.svg)](https://codecov.io/gh/ni-kr/tayna)
 [![crates.io](https://img.shields.io/crates/v/tayna.svg)](https://crates.io/crates/tayna)
 [![docs.rs](https://docs.rs/tayna/badge.svg)](https://docs.rs/tayna)
+[![msrv](https://img.shields.io/crates/msrv/tayna.svg)](https://github.com/ni-kr/tayna#3-installation)
 [![license](https://img.shields.io/crates/l/tayna.svg)](https://github.com/ni-kr/tayna/blob/main/LICENSE)
+
+[![check](https://github.com/ni-kr/tayna/actions/workflows/check.yml/badge.svg?branch=main&event=push)](https://github.com/ni-kr/tayna/actions/workflows/check.yml?query=branch%3Amain+event%3Apush)
+[![test](https://github.com/ni-kr/tayna/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/ni-kr/tayna/actions/workflows/test.yml?query=branch%3Amain+event%3Apush)
+[![codecov](https://codecov.io/gh/ni-kr/tayna/branch/main/graph/badge.svg)](https://codecov.io/gh/ni-kr/tayna)
+[![security](https://github.com/ni-kr/tayna/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/ni-kr/tayna/actions/workflows/security.yml?query=branch%3Amain)
 
 Policy-driven password generation for Rust, with a builder API and a thin
 command-line wrapper.
@@ -91,6 +93,9 @@ qF7w&x!SjHTrekIY&Oiuh1h8#xlAQHV3
 ```
 
 ## 3. Installation
+
+Building either the library or the command-line tool requires Rust 1.85.0 or
+newer. The installed binary is native code and needs no toolchain to run. 
 
 ### 3.1. As a dependency
 
