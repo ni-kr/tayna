@@ -72,13 +72,18 @@ fn main() -> Result<(), PolicyError> {
     Ok(())
 }
 
-/// Prints a policy and one password generated from it.
+/// Prints a policy, one password generated from it, and its strength.
 fn report(label: &str, policy: &PasswordPolicy) {
     println!(
-        "{label}:\n  {} chars from {} (alphabet of {}):\n  {}\n",
+        "{label}:\n  \
+         {} chars from {} (alphabet of {})\n  \
+         {:.2} bits of entropy: {}\n  \
+         {}\n",
         policy.length(),
         policy.classes(),
         policy.alphabet().len(),
+        policy.entropy_bits(),
+        policy.strength(),
         policy.generate().as_str(),
     );
 }
