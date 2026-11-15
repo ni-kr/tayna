@@ -5,7 +5,8 @@ use std::collections::HashSet;
 use rand::SeedableRng as _;
 use rand::rngs::StdRng;
 use tayna::{
-    CharClass, CharClassSet, Password, PasswordPolicy, PasswordPolicyBuilder, PolicyError,
+    CharClass, CharClassSet, Password, PasswordPolicy, PasswordPolicyBuilder, PasswordStrength,
+    PolicyError,
 };
 
 #[test]
@@ -15,6 +16,8 @@ fn public_types_are_reachable_from_the_crate_root() {
     let policy: PasswordPolicy = builder.length(16).build().expect("valid policy");
     let _: Password = policy.generate();
     let _: CharClassSet = policy.classes();
+    let _: f64 = policy.entropy_bits();
+    let _: PasswordStrength = policy.strength();
     let _: PolicyError = PasswordPolicy::builder().build().unwrap_err();
 }
 
@@ -90,6 +93,64 @@ fn a_policy_without_ambiguous_characters_only_drops_confusable_ones() {
         .expect("valid policy");
 
     assert_eq!(pin.alphabet(), "0123456789");
+}
+
+/// How close two entropy figures have to be to count as equal.
+const EPSILON: f64 = 1e-9;
+
+#[test]
+fn a_policy_reports_the_entropy_of_the_passwords_it_permits() {
+    let default = PasswordPolicy::builder()
+        .length(20)
+        .build()
+        .expect("valid policy");
+    let relaxed = PasswordPolicy::builder()
+        .length(20)
+        .require_each_enabled_class(false)
+        .build()
+        .expect("valid policy");
+    let readable = PasswordPolicy::builder()
+        .length(20)
+        .exclude_ambiguous(true)
+        .build()
+        .expect("valid policy");
+    let pin = PasswordPolicy::builder()
+        .length(6)
+        .classes(CharClass::Digits)
+        .build()
+        .expect("valid policy");
+
+    // 20 characters out of 70, minus the passwords that miss a class.
+    assert!((default.entropy_bits() - 122.381_983_482).abs() < EPSILON);
+    // 70^20 possible passwords.
+    assert!((relaxed.entropy_bits() - 122.585_660_339).abs() < EPSILON);
+    // 20 characters out of 65, minus the passwords that miss a class.
+    assert!((readable.entropy_bits() - 120.227_626_357).abs() < EPSILON);
+    // 10^6 possible passwords.
+    assert!((pin.entropy_bits() - 19.931_568_569).abs() < EPSILON);
+}
+
+#[test]
+fn a_policy_rates_its_own_entropy() {
+    let cases = [
+        (6, PasswordStrength::Weak),
+        (12, PasswordStrength::Moderate),
+        (16, PasswordStrength::Strong),
+        (24, PasswordStrength::VeryStrong),
+    ];
+
+    for (length, expected) in cases {
+        let policy = PasswordPolicy::builder()
+            .length(length)
+            .build()
+            .expect("valid policy");
+
+        assert_eq!(policy.strength(), expected);
+        assert_eq!(
+            policy.strength(),
+            PasswordStrength::from_bits(policy.entropy_bits())
+        );
+    }
 }
 
 #[test]

@@ -3,7 +3,7 @@
 use proptest::prelude::*;
 use rand::SeedableRng as _;
 use rand::rngs::StdRng;
-use tayna::{CharClass, CharClassSet, PasswordPolicy};
+use tayna::{CharClass, CharClassSet, PasswordPolicy, PasswordStrength};
 
 /// Any non-empty set of the four character classes.
 ///
@@ -48,6 +48,22 @@ mod password_policy {
             .exclude_ambiguous(exclude_ambiguous)
             .build()
             .expect("a non-empty class set with an in-range length is always valid")
+    }
+
+    /// How close two entropy figures have to be to count as equal.
+    const EPSILON: f64 = 1e-9;
+
+    /// Calculates the entropy of all possible passwords over the policy's
+    /// alphabet, without requiring all character classes to appear.
+    ///
+    /// This independent calculation is used as a reference to verify the
+    /// library's entropy calculation.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "lengths are far below the exactly representable range"
+    )]
+    fn unconstrained_bits(policy: &PasswordPolicy) -> f64 {
+        policy.length() as f64 * (policy.alphabet().len() as f64).log2()
     }
 
     proptest! {
@@ -172,6 +188,105 @@ mod password_policy {
                 .generate_with(&mut StdRng::seed_from_u64(seed));
 
             prop_assert_eq!(password.len(), password.as_str().chars().count());
+        }
+
+        #[test]
+        fn entropy_never_falls_below_the_minimum_supported_value(
+            length in lengths(),
+            class_set in class_sets(),
+            require_each in any::<bool>(),
+            exclude_ambiguous in any::<bool>(),
+        ) {
+            let bits = policy(length, class_set, require_each, exclude_ambiguous).entropy_bits();
+
+            prop_assert!(bits.is_finite());
+            // The smallest space the crate can describe is six characters drawn from the
+            // eight symbols: log2(8^6).
+            prop_assert!(bits >= 18.0, "{bits} bits is below the smallest policy");
+        }
+
+        #[test]
+        fn entropy_without_required_classes_matches_the_unconstrained_alphabet(
+            length in lengths(),
+            class_set in class_sets(),
+            exclude_ambiguous in any::<bool>(),
+        ) {
+            let relaxed = policy(length, class_set, false, exclude_ambiguous);
+
+            prop_assert!(
+                (relaxed.entropy_bits() - unconstrained_bits(&relaxed)).abs() < EPSILON
+            );
+        }
+
+        #[test]
+        fn requiring_every_class_does_not_increase_entropy(
+            length in lengths(),
+            class_set in class_sets(),
+            exclude_ambiguous in any::<bool>(),
+        ) {
+            let strict = policy(length, class_set, true, exclude_ambiguous);
+            let relaxed = policy(length, class_set, false, exclude_ambiguous);
+
+            prop_assert!(strict.entropy_bits() <= relaxed.entropy_bits());
+
+            if class_set.len() == 1 {
+                // A single class is in every password already, so no password is ruled out.
+                prop_assert!((strict.entropy_bits() - relaxed.entropy_bits()).abs() < EPSILON);
+            } else {
+                // With several classes the requirement does rule passwords out, although in a
+                // long password it rules out so few that the difference is too small for an
+                // `f64` to hold. At the shortest length it is always visible.
+                let short_strict = policy(PasswordPolicy::MIN_LENGTH, class_set, true, exclude_ambiguous);
+                let short_relaxed = policy(PasswordPolicy::MIN_LENGTH, class_set, false, exclude_ambiguous);
+
+                prop_assert!(short_strict.entropy_bits() < short_relaxed.entropy_bits());
+            }
+        }
+
+        #[test]
+        fn excluding_ambiguous_characters_does_not_increase_entropy(
+            length in lengths(),
+            class_set in class_sets(),
+            require_each in any::<bool>(),
+        ) {
+            let full = policy(length, class_set, require_each, false);
+            let readable = policy(length, class_set, require_each, true);
+
+            prop_assert!(readable.entropy_bits() <= full.entropy_bits());
+            // Equality holds only when the class set holds nothing confusable.
+            prop_assert_eq!(
+                (readable.entropy_bits() - full.entropy_bits()).abs() < EPSILON,
+                class_set.ambiguous_chars().is_empty()
+            );
+        }
+
+        #[test]
+        fn increasing_password_length_increases_entropy(
+            length in PasswordPolicy::MIN_LENGTH..PasswordPolicy::MAX_LENGTH,
+            class_set in class_sets(),
+            require_each in any::<bool>(),
+            exclude_ambiguous in any::<bool>(),
+        ) {
+            let shorter = policy(length, class_set, require_each, exclude_ambiguous);
+            let longer = policy(length + 1, class_set, require_each, exclude_ambiguous);
+
+            prop_assert!(shorter.entropy_bits() < longer.entropy_bits());
+            prop_assert!(shorter.strength() <= longer.strength());
+        }
+
+        #[test]
+        fn password_strength_matches_its_entropy_rating(
+            length in lengths(),
+            class_set in class_sets(),
+            require_each in any::<bool>(),
+            exclude_ambiguous in any::<bool>(),
+        ) {
+            let policy = policy(length, class_set, require_each, exclude_ambiguous);
+
+            prop_assert_eq!(
+                policy.strength(),
+                PasswordStrength::from_bits(policy.entropy_bits())
+            );
         }
     }
 }

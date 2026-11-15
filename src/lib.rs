@@ -5,11 +5,13 @@
 )]
 
 mod char_class;
+mod entropy;
 mod error;
 mod password;
 mod policy;
 
 pub use crate::char_class::{CharClass, CharClassIter, CharClassSet};
+pub use crate::entropy::PasswordStrength;
 pub use crate::error::PolicyError;
 pub use crate::password::Password;
 pub use crate::policy::{PasswordPolicy, PasswordPolicyBuilder};
