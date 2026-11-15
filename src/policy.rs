@@ -4,6 +4,7 @@ use rand::seq::SliceRandom as _;
 use rand::{Rng, RngExt as _};
 
 use crate::char_class::{CharClass, CharClassSet};
+use crate::entropy::{self, PasswordStrength};
 use crate::error::PolicyError;
 use crate::password::Password;
 
@@ -121,6 +122,83 @@ impl PasswordPolicy {
         &self.alphabet
     }
 
+    /// The entropy of the passwords this policy permits, in bits.
+    ///
+    /// Entropy is the base-2 logarithm of the number of distinct passwords the
+    /// policy allows. Each additional bit doubles the number of possibilities.
+    ///
+    /// The calculation accounts for the entire policy:
+    ///
+    /// - [`length`](Self::length) determines the number of character positions.
+    /// - [`classes`](Self::classes) and
+    ///   [`excludes_ambiguous`](Self::excludes_ambiguous) determine the alphabet
+    ///   from which each character is selected.
+    /// - [`requires_each_enabled_class`](Self::requires_each_enabled_class)
+    ///   determines whether every enabled class must appear at least once. When
+    ///   enabled, this excludes passwords that omit one or more classes and
+    ///   therefore reduces the entropy.
+    ///
+    /// The value describes a password drawn uniformly from the policy's permitted
+    /// passwords. It does not estimate the entropy of a human-chosen password,
+    /// which may be much more predictable.
+    ///
+    /// For a plain-language interpretation of the result, see
+    /// [`strength`](Self::strength).
+    ///
+    /// # Examples
+    /// ```
+    /// use tayna::PasswordPolicy;
+    ///
+    /// let default = PasswordPolicy::builder().length(20).build()?;
+    /// let relaxed = PasswordPolicy::builder()
+    ///     .length(20)
+    ///     .require_each_enabled_class(false)
+    ///     .build()?;
+    ///
+    /// assert!((default.entropy_bits() - 122.38).abs() < 0.005);
+    /// assert!((relaxed.entropy_bits() - 122.59).abs() < 0.005);
+    /// # Ok::<(), tayna::PolicyError>(())
+    /// ```
+    #[must_use]
+    pub fn entropy_bits(&self) -> f64 {
+        let pool_sizes: Vec<usize> = self
+            .classes
+            .iter()
+            .map(|class| class_pool_size(&self.alphabet, class))
+            .collect();
+
+        // Satisfying the contract of `entropy::bits` takes no work here. A built policy
+        // has at least `MIN_LENGTH` characters, at least one enabled class, and no
+        // class that `exclude_ambiguous` could empty.
+        entropy::bits(&pool_sizes, self.length, self.require_each_enabled_class)
+    }
+
+    /// How this policy's [`entropy_bits`](Self::entropy_bits) translates into a
+    /// plain-language rating.
+    ///
+    /// The rating is based on the policy's entropy and is one of four levels:
+    /// weak, moderate, strong, and very strong. The entropy bands each rating
+    /// covers are documented on [`PasswordStrength`]. These ratings are
+    /// practical guidelines, not a scientific standard. They provide a
+    /// convenient way to interpret the entropy without comparing numerical
+    /// values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tayna::{PasswordPolicy, PasswordStrength};
+    ///
+    /// let policy = PasswordPolicy::builder().length(16).build()?;
+    ///
+    /// assert_eq!(policy.strength(), PasswordStrength::Strong);
+    /// assert!(policy.strength() >= PasswordStrength::Strong);
+    /// # Ok::<(), tayna::PolicyError>(())
+    /// ```
+    #[must_use]
+    pub fn strength(&self) -> PasswordStrength {
+        PasswordStrength::from_bits(self.entropy_bits())
+    }
+
     /// Generates a password using the default cryptographic random number
     /// generator.
     ///
@@ -207,8 +285,25 @@ impl PasswordPolicy {
 fn class_pool(alphabet: &str, class: CharClass) -> Vec<u8> {
     alphabet
         .bytes()
-        .filter(|byte| class.chars().as_bytes().contains(byte))
+        .filter(|&byte| belongs_to(byte, class))
         .collect()
+}
+
+/// Returns the number of characters of `class` present in `alphabet`.
+///
+/// Unlike [`class_pool`], this function counts the matching characters without
+/// constructing the pool. It is used to calculate password entropy, which
+/// depends on each class's number of characters in the alphabet.
+fn class_pool_size(alphabet: &str, class: CharClass) -> usize {
+    alphabet
+        .bytes()
+        .filter(|&byte| belongs_to(byte, class))
+        .count()
+}
+
+/// Returns whether `byte` belongs to `class`.
+fn belongs_to(byte: u8, class: CharClass) -> bool {
+    class.chars().as_bytes().contains(&byte)
 }
 
 /// Picks one element uniformly at random.
@@ -228,6 +323,10 @@ fn pick<R: Rng + ?Sized>(pool: &[u8], rng: &mut R) -> u8 {
 /// lowering [`PasswordPolicy::MIN_LENGTH`] or adding a fifth [`CharClass`]
 /// breaks the build instead of producing passwords that silently violate their
 /// own policy.
+///
+/// [`entropy_bits`](PasswordPolicy::entropy_bits) relies on the same guarantee.
+/// A requirement no password can satisfy would describe a password space with
+/// nothing in it, which has no entropy to report.
 const _: () = assert!(PasswordPolicy::MIN_LENGTH >= CharClass::ALL.len());
 
 /// A builder for [`PasswordPolicy`].
@@ -520,7 +619,7 @@ mod tests {
     use rand::SeedableRng as _;
     use rand::rngs::StdRng;
 
-    use super::{PasswordPolicy, PasswordPolicyBuilder, class_pool};
+    use super::{PasswordPolicy, PasswordPolicyBuilder, class_pool, class_pool_size};
     use crate::char_class::{CharClass, CharClassSet};
     use crate::error::PolicyError;
 
@@ -654,6 +753,79 @@ mod tests {
                 .unwrap();
 
             assert_eq!(pin.alphabet(), CharClass::Digits.chars());
+        }
+    }
+
+    mod entropy {
+        use super::*;
+
+        /// How close two entropy figures have to be to count as equal.
+        const EPSILON: f64 = 1e-9;
+
+        #[test]
+        fn entropy_reflects_the_number_of_permitted_passwords() {
+            let default = PasswordPolicy::builder().length(16).build().unwrap();
+
+            assert!((default.entropy_bits() - 97.708_483_848).abs() < EPSILON);
+        }
+
+        #[test]
+        fn requiring_every_class_lowers_the_entropy() {
+            let strict = PasswordPolicy::builder().length(16).build().unwrap();
+            let relaxed = PasswordPolicy::builder()
+                .length(16)
+                .require_each_enabled_class(false)
+                .build()
+                .unwrap();
+
+            assert!(strict.entropy_bits() < relaxed.entropy_bits());
+            assert!((relaxed.entropy_bits() - 98.068_528_271).abs() < EPSILON);
+        }
+
+        #[test]
+        fn excluding_ambiguous_characters_lowers_the_entropy() {
+            let full = PasswordPolicy::builder().length(16).build().unwrap();
+            let readable = PasswordPolicy::builder()
+                .length(16)
+                .exclude_ambiguous(true)
+                .build()
+                .unwrap();
+
+            assert!(readable.entropy_bits() < full.entropy_bits());
+            assert!((readable.entropy_bits() - 95.972_006_345).abs() < EPSILON);
+        }
+
+        #[test]
+        fn disabled_classes_do_not_contribute_to_entropy() {
+            let pin = PasswordPolicy::builder()
+                .length(6)
+                .classes(CharClass::Digits)
+                .build()
+                .unwrap();
+
+            assert!((pin.entropy_bits() - 19.931_568_569).abs() < EPSILON);
+        }
+
+        #[test]
+        fn class_pool_size_counts_remaining_class_characters() {
+            let readable = PasswordPolicy::builder()
+                .length(16)
+                .exclude_ambiguous(true)
+                .build()
+                .unwrap();
+
+            // `O` and `I` are gone from the upper-case letters, `l` from the
+            // lower-case ones, `0` and `1` from the digits.
+            assert_eq!(
+                class_pool_size(readable.alphabet(), CharClass::Uppercase),
+                24
+            );
+            assert_eq!(
+                class_pool_size(readable.alphabet(), CharClass::Lowercase),
+                25
+            );
+            assert_eq!(class_pool_size(readable.alphabet(), CharClass::Digits), 8);
+            assert_eq!(class_pool_size(readable.alphabet(), CharClass::Symbols), 8);
         }
     }
 
