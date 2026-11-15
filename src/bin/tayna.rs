@@ -19,6 +19,9 @@ const EXIT_IO_ERROR: u8 = 1;
 /// Passwords are built from upper-case letters, lower-case letters, digits, and
 /// symbols. Each character class can be disabled individually, but at least one
 /// class must remain enabled. Ambiguous characters can also be excluded.
+///
+/// Passwords are written to stdout, one per line. The optional entropy report
+/// and any errors are written to stderr.
 #[derive(Debug, Parser)]
 #[command(name = "tayna", version)]
 #[expect(
@@ -53,6 +56,10 @@ struct Cli {
     /// Do not force each enabled character class to appear
     #[arg(long)]
     allow_missing_classes: bool,
+
+    /// Report the policy's entropy and strength to stderr
+    #[arg(short = 'e', long)]
+    entropy: bool,
 
     /// Number of passwords to generate
     #[arg(
@@ -98,6 +105,17 @@ fn main() -> ExitCode {
     // argument group, so the library's own rule is reused and reported in
     // clap's format.
     let policy = cli.policy().unwrap_or_else(|error| usage_error(&error));
+
+    if cli.entropy {
+        // Reported once per run, not once per password, since entropy refers to the
+        // policy rather than individual passwords. Writing it to stderr keeps stdout
+        // pipe-friendly.
+        eprintln!(
+            "entropy: {:.2} bits ({})",
+            policy.entropy_bits(),
+            policy.strength()
+        );
+    }
 
     match write_passwords(&policy, cli.count) {
         Ok(()) => ExitCode::SUCCESS,
@@ -265,5 +283,21 @@ mod tests {
         let cli = Cli::try_parse_from(["tayna", "12"]).unwrap();
 
         assert_eq!(cli.count, 1);
+    }
+
+    #[test]
+    fn entropy_is_disabled_by_default() {
+        let cli = Cli::try_parse_from(["tayna", "12"]).unwrap();
+
+        assert!(!cli.entropy);
+    }
+
+    #[test]
+    fn entropy_flag_accepts_short_and_long_forms() {
+        for flag in ["--entropy", "-e"] {
+            let cli = Cli::try_parse_from(["tayna", "12", flag]).unwrap();
+
+            assert!(cli.entropy);
+        }
     }
 }

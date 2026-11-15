@@ -16,22 +16,26 @@ fn tayna() -> Command {
     Command::cargo_bin("tayna").expect("the `tayna` binary should be built")
 }
 
-/// Runs a successful invocation and returns the generated lines, trimmed of the
-/// trailing newline.
+/// Runs a successful invocation and returns the generated passwords, trimmed of
+/// the trailing newline.
 fn passwords(args: &[&str]) -> Vec<String> {
-    let output = tayna()
-        .args(args)
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
+    run(args).0
+}
 
-    String::from_utf8(output)
+/// Runs a successful invocation and returns its stdout lines and its stderr.
+fn run(args: &[&str]) -> (Vec<String>, String) {
+    let output = tayna().args(args).assert().success().get_output().clone();
+
+    let passwords = String::from_utf8(output.stdout)
         .expect("output should be UTF-8")
         .lines()
         .map(str::to_owned)
-        .collect()
+        .collect();
+
+    (
+        passwords,
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+    )
 }
 
 /// Runs an invocation expected to fail and returns its stderr.
@@ -185,6 +189,65 @@ fn excluding_ambiguous_characters_spares_those_without_a_look_alike() {
 }
 
 #[test]
+fn entropy_is_omitted_by_default() {
+    let (passwords, stderr) = run(&["20"]);
+
+    assert_eq!(passwords.len(), 1);
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn entropy_is_written_to_stderr_while_passwords_go_to_stdout() {
+    let (passwords, stderr) = run(&["20", "--entropy"]);
+
+    assert_eq!(stderr, "entropy: 122.38 bits (strong)\n");
+    assert_eq!(passwords.len(), 1);
+    assert_eq!(passwords[0].chars().count(), 20);
+}
+
+#[test]
+fn reported_entropy_reflects_policy_options() {
+    let cases = [
+        (
+            &["20", "-e", "--allow-missing-classes"][..],
+            "122.59 bits (strong)",
+        ),
+        (&["20", "-e", "--no-ambiguous"][..], "120.23 bits (strong)"),
+        (&["6", "-e", "-U", "-L", "-S"][..], "19.93 bits (weak)"),
+    ];
+
+    for (args, expected) in cases {
+        let (_, stderr) = run(args);
+
+        assert_eq!(stderr, format!("entropy: {expected}\n"));
+    }
+}
+
+#[test]
+fn entropy_is_rated() {
+    let cases = [
+        ("8", "weak"),
+        ("12", "moderate"),
+        ("16", "strong"),
+        ("24", "very strong"),
+    ];
+
+    for (length, expected) in cases {
+        let (_, stderr) = run(&[length, "-e"]);
+
+        assert!(stderr.ends_with(&format!("({expected})\n")));
+    }
+}
+
+#[test]
+fn entropy_is_reported_only_once_for_multiple_passwords() {
+    let (passwords, stderr) = run(&["16", "-e", "-n", "5"]);
+
+    assert_eq!(stderr, "entropy: 97.71 bits (strong)\n");
+    assert_eq!(passwords.len(), 5);
+}
+
+#[test]
 fn help_lists_all_options() {
     tayna()
         .arg("--help")
@@ -197,6 +260,7 @@ fn help_lists_all_options() {
         .stdout(predicate::str::contains("--no-symbols"))
         .stdout(predicate::str::contains("--no-ambiguous"))
         .stdout(predicate::str::contains("--allow-missing-classes"))
+        .stdout(predicate::str::contains("--entropy"))
         .stdout(predicate::str::contains("--count"))
         .stdout(predicate::str::contains("--help"))
         .stdout(predicate::str::contains("--version"));
